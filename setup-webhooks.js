@@ -32,55 +32,15 @@ async function setupTelegram() {
 }
 
 async function setupComposio() {
-  console.log(`\n[composio] Configuring Strava trigger → ${STRAVA_URL}`);
-
-  // Step 1: set the global webhook callback URL for this Composio account
-  const cbRes = await fetch(
-    'https://backend.composio.dev/api/v1/triggers/set_callback_url',
-    {
-      method: 'POST',
-      headers: {
-        'x-api-key': process.env.COMPOSIO_API_KEY,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ callbackURL: STRAVA_URL }),
-    }
-  );
-  const cbData = await cbRes.json();
-  if (!cbRes.ok) {
-    console.warn('[composio] set_callback_url returned', cbRes.status, JSON.stringify(cbData));
-  } else {
-    console.log('[composio] ✓ Callback URL set');
-  }
-
-  // Step 2: enable the STRAVA_NEW_ACTIVITY_CREATED trigger for the default entity
-  const trigRes = await fetch(
-    'https://backend.composio.dev/api/v1/triggers/enable',
-    {
-      method: 'POST',
-      headers: {
-        'x-api-key': process.env.COMPOSIO_API_KEY,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        triggerName: 'STRAVA_CREATE_ACTIVITY',
-        entityId: 'default',
-        triggerConfig: {},
-      }),
-    }
-  );
-  const trigData = await trigRes.json();
-  if (!trigRes.ok) {
-    console.warn('[composio] enable trigger returned', trigRes.status, JSON.stringify(trigData));
-    console.log('\n── Manual Composio step ──────────────────────────────────────');
-    console.log('If the auto-config above failed, open the Composio dashboard:');
-    console.log('  https://app.composio.dev/triggers');
-    console.log('Enable the Strava "New Activity" trigger and set webhook URL to:');
-    console.log(`  ${STRAVA_URL}`);
-    console.log('──────────────────────────────────────────────────────────────\n');
-  } else {
-    console.log('[composio] ✓ Strava trigger enabled');
-  }
+  console.log(`\n[composio] Strava webhook URL:`);
+  console.log(`  ${STRAVA_URL}`);
+  console.log('\n── Manual Composio step ──────────────────────────────────────────');
+  console.log('Composio v3 dropped HTTP callback support for Strava triggers.');
+  console.log('Set up the trigger in the dashboard (takes ~30 seconds):');
+  console.log('  1. Open https://app.composio.dev/triggers');
+  console.log('  2. Add Trigger → Strava → "New Activity Created"');
+  console.log('  3. Set the webhook URL above');
+  console.log('──────────────────────────────────────────────────────────────────\n');
 }
 
 (async () => {
