@@ -8,7 +8,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 
 const app = express();
 
-// Capture raw body for Composio signature verification before JSON parsing
+// Capture raw body before JSON parsing — needed for Composio HMAC verification
 app.use(
   express.json({
     verify: (req, _res, buf) => { req.rawBody = buf.toString('utf8'); },
@@ -22,62 +22,48 @@ const supabase = createClient(
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-// ─── Composio/Strava webhook ──────────────────────────────────────────────────
+// ─── Strava direct webhook ────────────────────────────────────────────────────
 
-// Verifies the Composio v3 HMAC-SHA256 webhook signature.
-// Composio signs with: HMAC-SHA256({webhook-id}.{webhook-timestamp}.{rawBody})
-// and puts the result in the `webhook-signature` header as "v1,<base64>".
-function verifyComposioSignature(req) {
-  const sig       = req.headers['webhook-signature'] || '';
-  const timestamp = req.headers['webhook-timestamp'] || '';
-  const id        = req.headers['webhook-id']        || '';
-  const secret    = process.env.COMPOSIO_SIGNING_SECRET || '';
+// GET — Strava calls this once during webhook subscription to verify ownership.
+// Responds with the hub.challenge value if the verify_token matches.
+app.get('/webhook/strava', (req, res) => {
+  const mode      = req.query['hub.mode'];
+  const token     = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
 
-  if (!sig || !timestamp || !id || !secret) return false;
-
-  const message  = `${id}.${timestamp}.${req.rawBody}`;
-  const expected = crypto
-    .createHmac('sha256', secret)
-    .update(message)
-    .digest('base64');
-
-  // Header may contain multiple space-separated signatures; accept any v1 match
-  return sig.split(' ').some((s) => {
-    const [ver, val] = s.split(',');
-    if (ver !== 'v1' || !val) return false;
-    return crypto.timingSafeEqual(Buffer.from(val), Buffer.from(expected));
-  });
-}
-
-app.post('/webhook/strava', async (req, res) => {
-  if (!verifyComposioSignature(req)) {
-    console.warn('[strava] invalid signature — rejected');
-    return res.status(401).json({ error: 'Unauthorized' });
+  if (mode === 'subscribe' && token === process.env.STRAVA_VERIFY_TOKEN) {
+    console.log('[strava] subscription verified');
+    return res.json({ 'hub.challenge': challenge });
   }
+  res.status(403).json({ error: 'Forbidden' });
+});
 
-  res.status(200).json({ ok: true });
+// POST — Strava sends a minimal event; we fetch the full activity and upsert.
+app.post('/webhook/strava', async (req, res) => {
+  res.status(200).json({ ok: true }); // must ack within 2 s
 
   try {
-    const body = req.body;
+    const event = req.body;
+    if (event.object_type !== 'activity' || event.aspect_type !== 'create') return;
 
-    // Composio v3 wraps the activity in various shapes; unwrap all of them
-    const activity =
-      body?.payload?.data ??
-      body?.data ??
-      body?.client_payload ??
-      body?.clientPayload ??
-      body?.payload ??
-      body;
+    const activityId = event.object_id;
+    console.log(`[strava] new activity ${activityId}`);
 
-    const stravaId = activity?.id ?? activity?.strava_id;
-    if (!stravaId) {
-      console.warn('[strava] no activity id in payload — skipped');
+    const token   = await getStravaToken();
+    const actRes  = await fetch(
+      `https://www.strava.com/api/v3/activities/${activityId}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    const activity = await actRes.json();
+
+    if (!activity.id) {
+      console.error('[strava] unexpected response:', JSON.stringify(activity).slice(0, 200));
       return;
     }
 
     const { error } = await supabase.from('activities').upsert(
       {
-        strava_id:     Number(stravaId),
+        strava_id:     activity.id,
         type:          activity.type          ?? activity.sport_type ?? null,
         distance_m:    activity.distance      ?? null,
         moving_time_s: activity.moving_time   ?? null,
@@ -88,10 +74,46 @@ app.post('/webhook/strava', async (req, res) => {
     );
 
     if (error) console.error('[strava] upsert error:', error.message);
-    else console.log(`[strava] upserted activity ${stravaId}`);
+    else console.log(`[strava] saved ${activity.type} ${activityId}`);
   } catch (err) {
     console.error('[strava] handler error:', err.message);
   }
+});
+
+// ─── Strava OAuth (one-time setup) ───────────────────────────────────────────
+
+// Visit this URL in a browser once to authorise your Strava app and store tokens.
+app.get('/auth/strava', (req, res) => {
+  const params = new URLSearchParams({
+    client_id:       process.env.STRAVA_CLIENT_ID,
+    response_type:   'code',
+    redirect_uri:    `${process.env.PUBLIC_URL}/auth/strava/callback`,
+    approval_prompt: 'force',
+    scope:           'activity:read_all',
+  });
+  res.redirect(`https://www.strava.com/oauth/authorize?${params}`);
+});
+
+app.get('/auth/strava/callback', async (req, res) => {
+  const { code, error: oauthErr } = req.query;
+  if (oauthErr) return res.status(400).send(`OAuth error: ${oauthErr}`);
+
+  const tokenRes = await fetch('https://www.strava.com/oauth/token', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({
+      client_id:     process.env.STRAVA_CLIENT_ID,
+      client_secret: process.env.STRAVA_CLIENT_SECRET,
+      code,
+      grant_type:    'authorization_code',
+    }),
+  });
+  const tokens = await tokenRes.json();
+  if (!tokens.access_token) return res.status(400).json(tokens);
+
+  await saveTokens(tokens);
+  console.log('[strava] OAuth complete — tokens stored in Supabase');
+  res.send('<h2>✓ Strava connected!</h2><p>You can close this tab. Your coaching bot is fully wired up.</p>');
 });
 
 // ─── Telegram webhook ─────────────────────────────────────────────────────────
@@ -105,13 +127,12 @@ app.post('/webhook/telegram', async (req, res) => {
   res.status(200).json({ ok: true });
 
   try {
-    const update  = req.body;
-    const message = update.message ?? update.edited_message;
+    const message = req.body.message ?? req.body.edited_message;
     if (!message?.text) return;
 
     const chatId   = message.chat.id;
     const userText = message.text;
-    console.log(`[telegram] chat=${chatId} text="${userText.slice(0, 80)}"`);
+    console.log(`[telegram] chat=${chatId} "${userText.slice(0, 80)}"`);
 
     const reply = await getCoachingResponse(userText);
 
@@ -124,7 +145,7 @@ app.post('/webhook/telegram', async (req, res) => {
       }
     );
   } catch (err) {
-    console.error('[telegram] handler error:', err.message);
+    console.error('[telegram] error:', err.message);
   }
 });
 
@@ -174,6 +195,45 @@ async function getCoachingResponse(userText) {
   });
 
   return response.content[0].text;
+}
+
+// ─── Strava token management (stored in Supabase) ────────────────────────────
+
+async function getStravaToken() {
+  const { data: rows } = await supabase
+    .from('settings')
+    .select('key, value')
+    .in('key', ['strava_access_token', 'strava_refresh_token', 'strava_token_expires_at']);
+
+  const kv         = Object.fromEntries((rows || []).map(r => [r.key, r.value]));
+  const expiresAt  = parseInt(kv.strava_token_expires_at || '0', 10);
+
+  if (kv.strava_access_token && Date.now() / 1000 < expiresAt - 300) {
+    return kv.strava_access_token;
+  }
+
+  // Token expired — refresh it
+  const res    = await fetch('https://www.strava.com/oauth/token', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({
+      client_id:     process.env.STRAVA_CLIENT_ID,
+      client_secret: process.env.STRAVA_CLIENT_SECRET,
+      refresh_token: kv.strava_refresh_token,
+      grant_type:    'refresh_token',
+    }),
+  });
+  const tokens = await res.json();
+  await saveTokens(tokens);
+  return tokens.access_token;
+}
+
+async function saveTokens(tokens) {
+  await supabase.from('settings').upsert([
+    { key: 'strava_access_token',     value: tokens.access_token },
+    { key: 'strava_refresh_token',    value: tokens.refresh_token },
+    { key: 'strava_token_expires_at', value: String(tokens.expires_at) },
+  ]);
 }
 
 // ─── Start ────────────────────────────────────────────────────────────────────
