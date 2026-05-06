@@ -170,7 +170,7 @@ async function getCoachingResponse(userText) {
     ? 'No activities logged in the last 14 days.'
     : activities.map((a) => {
         const date      = new Date(a.started_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-        const distMi    = ((a.distance_m ?? 0) * 0.000621371).toFixed(2);
+        const distKm    = ((a.distance_m ?? 0) / 1000).toFixed(2);
         const totalSecs = a.moving_time_s ?? 0;
         const h         = Math.floor(totalSecs / 3600);
         const m         = Math.floor((totalSecs % 3600) / 60);
@@ -178,19 +178,19 @@ async function getCoachingResponse(userText) {
         const timeStr   = h > 0
           ? `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`
           : `${m}:${String(s).padStart(2,'0')}`;
-        const distMiNum = parseFloat(distMi);
+        const distKmNum = parseFloat(distKm);
         let paceStr = 'N/A';
-        if (distMiNum > 0 && totalSecs > 0) {
-          const p = totalSecs / 60 / distMiNum;
-          paceStr = `${Math.floor(p)}:${String(Math.round((p - Math.floor(p)) * 60)).padStart(2,'0')}/mi`;
+        if (distKmNum > 0 && totalSecs > 0) {
+          const p = totalSecs / 60 / distKmNum;
+          paceStr = `${Math.floor(p)}:${String(Math.round((p - Math.floor(p)) * 60)).padStart(2,'0')}/km`;
         }
-        return `${date} | ${a.type ?? 'Unknown'} | ${distMi} mi | ${timeStr} | ${paceStr}`;
+        return `${date} | ${a.type ?? 'Unknown'} | ${distKm} km | ${timeStr} | ${paceStr}`;
       }).join('\n');
 
   const response = await anthropic.messages.create({
     model:      'claude-sonnet-4-6',
     max_tokens: 1024,
-    system:     "You are an expert endurance coach. Give concrete, personalized advice based on the athlete's recent training. Be direct and specific. Use imperial units.",
+    system:     "You are an expert endurance cycling coach. Give concrete, personalized advice based on the athlete's recent training. Be direct and specific. Use metric units.",
     messages:   [{ role: 'user', content: `Recent training (last 14 days):\n${trainingBlock}\n\nAthlete: ${userText}` }],
   });
 
