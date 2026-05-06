@@ -1,0 +1,21 @@
+{
+  "name": "strava-trainer",
+  "version": "1.0.0",
+  "description": "Personal AI coaching agent powered by Strava + Claude",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "migrate": "node migrate.js",
+    "setup-webhooks": "node setup-webhooks.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.36.3",
+    "@composio/core": "^0.8.1",
+    "@supabase/supabase-js": "^2.49.4",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2"
+  }
+}
