@@ -6,14 +6,16 @@ const PROJECT_REF = new URL(process.env.SUPABASE_URL).hostname.split('.')[0];
 
 const CREATE_SQL = `
 CREATE TABLE IF NOT EXISTS activities (
-  id           bigserial PRIMARY KEY,
-  strava_id    bigint UNIQUE NOT NULL,
-  type         text,
-  distance_m   double precision,
-  moving_time_s integer,
-  started_at   timestamptz,
-  raw          jsonb,
-  created_at   timestamptz DEFAULT now()
+  id                    bigserial PRIMARY KEY,
+  strava_id             bigint UNIQUE NOT NULL,
+  type                  text,
+  distance_m            double precision,
+  moving_time_s         integer,
+  started_at            timestamptz,
+  weighted_avg_power_w  integer,
+  avg_heart_rate_bpm    double precision,
+  raw                   jsonb,
+  created_at            timestamptz DEFAULT now()
 );
 `.trim();
 

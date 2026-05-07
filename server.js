@@ -63,12 +63,14 @@ app.post('/webhook/strava', async (req, res) => {
 
     const { error } = await supabase.from('activities').upsert(
       {
-        strava_id:     activity.id,
-        type:          activity.type          ?? activity.sport_type ?? null,
-        distance_m:    activity.distance      ?? null,
-        moving_time_s: activity.moving_time   ?? null,
-        started_at:    activity.start_date    ?? null,
-        raw:           activity,
+        strava_id:            activity.id,
+        type:                 activity.type                    ?? activity.sport_type ?? null,
+        distance_m:           activity.distance                ?? null,
+        moving_time_s:        activity.moving_time             ?? null,
+        started_at:           activity.start_date              ?? null,
+        weighted_avg_power_w: activity.weighted_average_watts  ?? null,
+        avg_heart_rate_bpm:   activity.average_heartrate       ?? null,
+        raw:                  activity,
       },
       { onConflict: 'strava_id' }
     );
@@ -160,7 +162,7 @@ async function getCoachingResponse(userText) {
 
   const { data: activities, error } = await supabase
     .from('activities')
-    .select('type, distance_m, moving_time_s, started_at')
+    .select('type, distance_m, moving_time_s, started_at, weighted_avg_power_w, avg_heart_rate_bpm')
     .gte('started_at', since)
     .order('started_at', { ascending: false });
 
@@ -184,7 +186,10 @@ async function getCoachingResponse(userText) {
           const p = totalSecs / 60 / distKmNum;
           paceStr = `${Math.floor(p)}:${String(Math.round((p - Math.floor(p)) * 60)).padStart(2,'0')}/km`;
         }
-        return `${date} | ${a.type ?? 'Unknown'} | ${distKm} km | ${timeStr} | ${paceStr}`;
+        const hrStr  = a.avg_heart_rate_bpm   != null ? `${Math.round(a.avg_heart_rate_bpm)} bpm` : null;
+        const wapStr = a.weighted_avg_power_w != null ? `${a.weighted_avg_power_w} W` : null;
+        const extras = [hrStr, wapStr].filter(Boolean).join(' | ');
+        return `${date} | ${a.type ?? 'Unknown'} | ${distKm} km | ${timeStr} | ${paceStr}${extras ? ' | ' + extras : ''}`;
       }).join('\n');
 
   const response = await anthropic.messages.create({
